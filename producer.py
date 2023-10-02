@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from confluent_kafka import Producer
-import csv, fastavro, io, os, sys, time
+import csv, fastavro, io, os, sys, time, json
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -11,49 +11,30 @@ app = FastAPI()
 logger.remove()
 logger.add(sys.stdout, colorize=True, format='<green>{level}</green> | {time:DD-MM-YYYY HH:mm:ss} | <level>{message}</level>')
 
-# Load environment variables from .env
+# Load environment variables from .env file
 load_dotenv()
-
-# Initialize Kafka producer
-kafka_brokers = os.getenv("KAFKA_BROKERS")
-kafka_client_id = os.getenv("KAFKA_CLIENT_ID")
+batch_max_records = int(os.getenv("BATCH_MAX_RECORDS"))
 kafka_topic = os.getenv("KAFKA_TOPIC")
 
-producer_config = {
-    "bootstrap.servers": kafka_brokers,
-    "client.id": kafka_client_id
-}
+# Parse the Avro schema string into a Python dictionary
+avro_schema = json.loads(os.getenv("AVRO_SCHEMA"))
 
-# Set the maximum kbytes buffering size / maximum number of records to batch
-queue_buffering_max_kbytes = int(os.getenv("QUEUE_BUFFERING_MAX_KBYTES"))
-batch_max_records = int(os.getenv("BATCH_MAX_RECORDS"))
+# Initialize Kafka producer
+def initialize_kafka_producer():
+    producer_config = {
+        "bootstrap.servers": os.getenv("KAFKA_BROKERS"),
+        "client.id": os.getenv("KAFKA_CLIENT_ID"),
+        "queue.buffering.max.kbytes": int(os.getenv("QUEUE_BUFFERING_MAX_KBYTES")),
+        "batch.num.messages": batch_max_records
+    }
+    try:
+        producer = Producer(producer_config)
+        return producer
+    except Exception as e:
+        logger.error(f"Error initializing Kafka producer: {str(e)}")
+        sys.exit(1)
 
-producer_config["queue.buffering.max.kbytes"] = queue_buffering_max_kbytes
-producer_config["batch.num.messages"] = batch_max_records
-
-try:
-    producer = Producer(producer_config)
-except Exception as e:
-    logger.error(f"Error initializing Kafka producer: {str(e)}")
-    sys.exit(1)
-
-# Define Avro schema
-avro_schema = {
-    "type": "record",
-    "name": "MyRecord",
-    "fields": [
-        {"name": "created_timestamp", "type": "string"},
-        {"name": "game_instance_id", "type": "int"},
-        {"name": "user_id", "type": "string"},
-        {"name": "game_id", "type": "int"},
-        {"name": "real_amount_bet", "type": "double"},
-        {"name": "bonus_amount_bet", "type": ["double", "null"]},
-        {"name": "real_amount_win", "type": ["double", "null"]},
-        {"name": "bonus_amount_win", "type": "double"},
-        {"name": "game_name", "type": "string"},
-        {"name": "provider", "type": "string"}
-    ]
-}
+producer = initialize_kafka_producer()
 
 # Function to send records to Kafka
 def send_records_to_kafka(records):
@@ -61,6 +42,7 @@ def send_records_to_kafka(records):
         avro_bytes_list = []
         for avro_record in records:
             print(avro_record)
+            # Serialize Avro records to Avro binary format
             avro_bytes_io = io.BytesIO()
             fastavro.schemaless_writer(avro_bytes_io, avro_schema, avro_record)
             avro_bytes = avro_bytes_io.getvalue()
@@ -80,7 +62,6 @@ def process_csv_row_to_avro(row):
     avro_record = {}
     for i, field in enumerate(avro_schema["fields"]):
         cell_value = row[i].strip() if i < len(row) else None
-
         try:
             if field["type"] == ["double", "null"] or field["type"] == "double":
                 avro_record[field["name"]] = float(cell_value) if cell_value else None
@@ -90,7 +71,6 @@ def process_csv_row_to_avro(row):
                 avro_record[field["name"]] = str(cell_value)
         except (ValueError, TypeError):
             avro_record[field["name"]] = None  # Handle invalid or None values
-
     return avro_record
 
 # Function to process an uploaded CSV file and publish Avro records
@@ -99,9 +79,8 @@ async def process_uploaded_csv_to_avro(file):
         if not file.filename.endswith(".csv"):
             raise HTTPException(status_code=400, detail="File type is not allowed")
 
-        # Read the entire CSV file | Reading in chunks (streaming approach) resulted to data loss/inconsistency
+        # Read the entire CSV file | Reading in chunks (streaming approach) resulted in data loss/inconsistency
         csv_content = await file.read()
-
         csv_lines = csv_content.decode("ISO-8859-1").replace('\x00', '')
         csv_lines = csv_lines.splitlines()
         csv_reader = csv.reader(csv_lines)
