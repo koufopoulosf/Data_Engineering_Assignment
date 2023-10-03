@@ -1,44 +1,10 @@
-from confluent_kafka import Consumer, KafkaError
-from clickhouse_driver import Client
-from dotenv import load_dotenv
-import fastavro, io, os, json
-
-# Initialize Kafka consumer
-def initialize_kafka_consumer():
-    # Configure Kafka consumer
-    consumer_config = {
-        'bootstrap.servers': os.getenv("KAFKA_BROKERS"),
-        'group.id': os.getenv("KAFKA_GROUP_ID"),
-        'auto.offset.reset': 'earliest'  # Start consuming from the beginning of the topic
-    }
-    # Create and return a Kafka consumer instance
-    consumer = Consumer(consumer_config)
-    consumer.subscribe([os.getenv("KAFKA_TOPIC")])  # Subscribe to the Kafka topic
-    return consumer
-
-# Initialize ClickHouse client
-def initialize_clickhouse_client():
-    # Configure ClickHouse connection parameters and return a ClickHouse client instance
-    client = Client(host=os.getenv("CLICKHOUSE_HOST"), port=int(os.getenv("CLICKHOUSE_PORT")))
-    client.execute(f'CREATE DATABASE IF NOT EXISTS {os.getenv("CLICKHOUSE_DATABASE")}')
-    client.execute(f'USE {os.getenv("CLICKHOUSE_DATABASE")}')
-    client.execute('''
-        CREATE TABLE IF NOT EXISTS game_rounds (
-            created_timestamp DateTime,
-            game_instance_id Int32,
-            user_id String,
-            game_id Int32,
-            real_amount_bet Float64,
-            bonus_amount_bet Nullable(Float64),
-            real_amount_win Nullable(Float64),
-            bonus_amount_win Float64,
-            game_name String,
-            provider String
-        ) ENGINE = MergeTree()
-        ORDER BY (game_id, user_id, toHour(created_timestamp));
-        '''
-    )
-    return client
+import fastavro, io
+from config import (
+    BATCH_MAX_RECORDS,
+    AVRO_SCHEMA_CONFIG,
+    initialize_kafka_consumer,
+    configure_clickhouse_client
+)
 
 # Insert batch of records into ClickHouse
 def insert_records_into_clickhouse(client, records):
@@ -47,20 +13,19 @@ def insert_records_into_clickhouse(client, records):
 
     insert_data_query = 'INSERT INTO game_rounds VALUES '
     values_list = []
-
     for avro_record in records:
-        # print(avro_record)
-        # Extract values from Avro record
+        # print(avro_record) # For debug purposes
+        # Extract values from Avro record and apply transformations based on the SQL table
         created_timestamp = f"toDateTime('{avro_record['created_timestamp']}')"
         game_instance_id = avro_record['game_instance_id']
         user_id = avro_record['user_id']
         game_id = avro_record['game_id']
-        real_amount_bet = avro_record['real_amount_bet']
+        real_amount_bet = avro_record['real_amount_bet'] if avro_record['real_amount_bet'] is not None else 'NULL'
         bonus_amount_bet = avro_record['bonus_amount_bet'] if avro_record['bonus_amount_bet'] is not None else 'NULL'
         real_amount_win = avro_record['real_amount_win'] if avro_record['real_amount_win'] is not None else 'NULL'
-        bonus_amount_win = avro_record['bonus_amount_win']
+        bonus_amount_win = avro_record['bonus_amount_win'] if avro_record['bonus_amount_win'] is not None else 'NULL'
         game_name = avro_record['game_name']
-        provider = avro_record['provider'].replace("'", "''")  # Fix Escape Character for Play'n GO
+        provider = avro_record['provider'].replace("'", "''") # Fix Escape Character for Play'n GO
 
         # Format values for insertion
         values = f"({created_timestamp}, {game_instance_id}, '{user_id}', {game_id}, {real_amount_bet}, {bonus_amount_bet}, {real_amount_win}, {bonus_amount_win}, '{game_name}', '{provider}')"
@@ -73,23 +38,11 @@ def insert_records_into_clickhouse(client, records):
     client.execute(insert_data_query)
 
 def main():
-    # Load environment variables from .env file
-    load_dotenv()
-    
-    # Load the maximum batch size for processing
-    batch_max_records = int(os.getenv("BATCH_MAX_RECORDS"))
-
-    # Read and parse the AVRO schema from the file
-    schema_file_path = os.path.join("schemas", "avro_schema.json")
-    with open(schema_file_path, "r") as schema_file:
-        avro_schema = json.load(schema_file)
-
-    # Initialize Kafka consumer and ClickHouse client
+    # Initialize Kafka consumer and configure ClickHouse client
     consumer = initialize_kafka_consumer()
-    client = initialize_clickhouse_client()
-    
+    client = configure_clickhouse_client()
     try:
-
+        
         # Initialize an empty batch list to hold Avro records
         message_batch = []
 
@@ -112,7 +65,7 @@ def main():
                     try:
                         # Deserialize Avro bytes using fastavro and the provided Avro schema
                         avro_bytes_io = io.BytesIO(avro_bytes)
-                        avro_record = fastavro.schemaless_reader(avro_bytes_io, avro_schema)
+                        avro_record = fastavro.schemaless_reader(avro_bytes_io, AVRO_SCHEMA_CONFIG)
                         # Append the deserialized Avro record to the batch list
                         message_batch.append(avro_record)
                     except Exception as e:
@@ -120,7 +73,7 @@ def main():
                 else:
                     print("Received empty Avro record.")
 
-            if len(message_batch) >= batch_max_records:
+            if len(message_batch) >= BATCH_MAX_RECORDS:
                 # Insert the batch of records into ClickHouse
                 insert_records_into_clickhouse(client, message_batch)
                 message_batch.clear()
