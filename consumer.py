@@ -90,48 +90,52 @@ def main():
     consumer = initialize_kafka_consumer()
     client = initialize_clickhouse_client()
     
-    # Create the ClickHouse table if it doesn't exist
-    create_clickhouse_table(client)
+    try:
+        # Create the ClickHouse table if it doesn't exist
+        create_clickhouse_table(client)
 
-    # Initialize an empty batch list to hold Avro records
-    message_batch = []
+        # Initialize an empty batch list to hold Avro records
+        message_batch = []
 
-    while True:
-        # Poll for Kafka messages
-        message = consumer.poll(1.0)
+        while True:
+            # Poll for Kafka messages
+            message = consumer.poll(1.0)
 
-        if message is None:
-            break
-
-        if message.error():
-            print(f"Error while consuming message: {message.error()}")
-        else:
-            avro_bytes = message.value()
-
-            if avro_bytes:
-                try:
-                    # Deserialize Avro bytes using fastavro and the provided Avro schema
-                    avro_bytes_io = io.BytesIO(avro_bytes)
-                    avro_record = fastavro.schemaless_reader(avro_bytes_io, avro_schema)
-                    # Append the deserialized Avro record to the batch list
-                    message_batch.append(avro_record)
-                except Exception as e:
-                    print(f"Error while deserializing Avro record: {e}")
+            if message is None:
+                if message_batch:
+                    # Process any remaining messages in the last batch
+                    insert_records_into_clickhouse(client, message_batch)
+                    message_batch.clear()
+                continue  # Continue polling for more messages
+                
+            if message.error():
+                print(f"Error while consuming message: {message.error()}")
             else:
-                print("Received empty Avro record.")
+                avro_bytes = message.value()
+                if avro_bytes:
+                    try:
+                        # Deserialize Avro bytes using fastavro and the provided Avro schema
+                        avro_bytes_io = io.BytesIO(avro_bytes)
+                        avro_record = fastavro.schemaless_reader(avro_bytes_io, avro_schema)
+                        # Append the deserialized Avro record to the batch list
+                        message_batch.append(avro_record)
+                    except Exception as e:
+                        print(f"Error while deserializing Avro record: {e}")
+                else:
+                    print("Received empty Avro record.")
 
-        if len(message_batch) >= batch_max_records:
-            # Insert the batch of records into ClickHouse
-            insert_records_into_clickhouse(client, message_batch)
-            message_batch.clear()
+            if len(message_batch) >= batch_max_records:
+                # Insert the batch of records into ClickHouse
+                insert_records_into_clickhouse(client, message_batch)
+                message_batch.clear()
 
-    if message_batch:
-        # Insert any remaining records in the last batch
-        insert_records_into_clickhouse(client, message_batch)
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
-    # Close the Kafka consumer and ClickHouse client gracefully
-    consumer.close()
-    client.disconnect()
+    finally:
+        # Close the Kafka consumer and ClickHouse client gracefully
+        consumer.close()
+        client.disconnect()
 
 if __name__ == '__main__':
     main()
