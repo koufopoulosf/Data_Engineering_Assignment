@@ -13,11 +13,13 @@ logger.add(sys.stdout, colorize=True, format='<green>{level}</green> | {time:DD-
 
 # Load environment variables from .env file
 load_dotenv()
-batch_max_records = int(os.getenv("BATCH_MAX_RECORDS"))
-kafka_topic = os.getenv("KAFKA_TOPIC")
+batch_max_records = int(os.getenv("BATCH_MAX_RECORDS")) # Global since it will be re-used frequently later
+kafka_topic = os.getenv("KAFKA_TOPIC") # Global since it will be re-used frequently later
 
-# Parse the Avro schema string into a Python dictionary
-avro_schema = json.loads(os.getenv("AVRO_SCHEMA"))
+# Read and parse the AVRO schema from the file
+schema_file_path = os.path.join("schemas", "avro_schema.json")
+with open(schema_file_path, "r") as schema_file:
+    avro_schema = json.load(schema_file)
 
 # Initialize Kafka producer
 def initialize_kafka_producer():
@@ -41,7 +43,7 @@ def send_records_to_kafka(records):
     try:
         avro_bytes_list = []
         for avro_record in records:
-            print(avro_record)
+            # print(avro_record)
             # Serialize Avro records to Avro binary format
             avro_bytes_io = io.BytesIO()
             fastavro.schemaless_writer(avro_bytes_io, avro_schema, avro_record)
