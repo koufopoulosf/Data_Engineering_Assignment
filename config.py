@@ -1,6 +1,7 @@
 from confluent_kafka import Producer, Consumer
+from confluent_kafka.admin import AdminClient, NewTopic
 from clickhouse_driver import Client
-import sys
+import sys, time
 
 # ClickHouse configuration
 CLICKHOUSE_HOST = "127.0.0.1"
@@ -33,14 +34,10 @@ AVRO_SCHEMA_CONFIG = {
 
 # ClickHouse Queries
 CLICKHOUSE_QUERIES= [
-    "DROP DATABASE IF EXISTS rivertechdb;"
     "CREATE DATABASE IF NOT EXISTS rivertechdb;",
     "USE rivertechdb;",
-    "DROP TABLE IF EXISTS game_rounds;",
     "CREATE TABLE IF NOT EXISTS game_rounds (created_timestamp DateTime, game_instance_id Int32, user_id String, game_id Int32, real_amount_bet Nullable(Float64), bonus_amount_bet Nullable(Float64), real_amount_win Nullable(Float64), bonus_amount_win Nullable(Float64), game_name String, provider String) ENGINE = MergeTree() ORDER BY (game_instance_id, game_id, user_id, toHour(created_timestamp)) PRIMARY KEY game_instance_id;",
-    "DROP TABLE IF EXISTS hourly_aggregated_game_rounds;",
     "CREATE TABLE IF NOT EXISTS hourly_aggregated_game_rounds (created_hour DateTime, game_id Int32, user_id String, total_real_amount_bet Nullable(Float64), total_bonus_amount_bet Nullable(Float64), total_real_amount_win Nullable(Float64), total_bonus_amount_win Nullable(Float64), game_name String, provider String) ENGINE = MergeTree() ORDER BY (game_id, user_id, created_hour);",
-    "DROP MATERIALIZED VIEW IF EXISTS mv_hourly_aggregated_game_rounds;",
     "CREATE MATERIALIZED VIEW IF NOT EXISTS mv_hourly_aggregated_game_rounds TO hourly_aggregated_game_rounds AS SELECT toStartOfHour(created_timestamp) AS created_hour, game_id, user_id, sum(real_amount_bet) AS total_real_amount_bet, sum(bonus_amount_bet) AS total_bonus_amount_bet, sum(real_amount_win) AS total_real_amount_win, sum(bonus_amount_win) AS total_bonus_amount_win, game_name, provider FROM game_rounds GROUP BY created_hour, game_id, user_id, game_name, provider;"
 ]
 
@@ -68,7 +65,7 @@ def initialize_kafka_producer():
 def initialize_clickhouse_client():
     try:
         client = Client(host=CLICKHOUSE_HOST, port=CLICKHOUSE_PORT)
-        client.execute(CLICKHOUSE_QUERIES[2])
+        client.execute(CLICKHOUSE_QUERIES[1])
         return client
     except Exception as e:
         print(f"Error initializing ClickHouse client: {str(e)}")
@@ -79,16 +76,27 @@ def initialize_clickhouse_client():
 # For consumer.py #
 ###################
 
-# Initialize Kafka consumer
-def initialize_kafka_consumer():
-    # Configure Kafka consumer
+# Configure Kafka consumer
+def configure_kafka_consumer():
     consumer_config = {
         'bootstrap.servers': KAFKA_BROKERS,
         'group.id': KAFKA_GROUP_ID,
         'auto.offset.reset': 'earliest'  # Start consuming from the beginning of the topic
     }
+    
     # Create and return a Kafka consumer instance
     try:
+        admin_client = AdminClient({'bootstrap.servers': KAFKA_BROKERS})
+        
+        # Check if the topic already exists
+        topics_metadata = admin_client.list_topics(timeout=5)
+        if KAFKA_TOPIC not in topics_metadata.topics:
+            # Topic doesn't exist, create it
+            new_topic = NewTopic(topic=KAFKA_TOPIC,num_partitions=1,replication_factor=1)
+            admin_client.create_topics([new_topic])
+            # Wait for a few seconds to allow the topic to be created
+            time.sleep(10)  # Adjust the delay as needed
+
         consumer = Consumer(consumer_config)
         consumer.subscribe([KAFKA_TOPIC])  # Subscribe to the Kafka topic
         return consumer
