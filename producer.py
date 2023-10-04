@@ -52,7 +52,7 @@ def send_records_to_kafka(records, kafka_producer, avro_schema):
         # Send the batched Avro records to Kafka
         for avro_bytes in avro_bytes_list:
             kafka_producer.produce(KAFKA_TOPIC, value=avro_bytes)
-        
+
         kafka_producer.flush()  # Flush Kafka messages here
 
     except Exception as e:
@@ -157,7 +157,7 @@ async def get_aggregated_game_rounds(
         if conditions:
             data_query += " WHERE " + " AND ".join(conditions)
             count_query += " WHERE " + " AND ".join(conditions)
-        
+
         # Add pagination
         data_query += f" ORDER BY created_hour LIMIT {page_size} OFFSET {(page_num - 1) * page_size};"
 
@@ -166,7 +166,7 @@ async def get_aggregated_game_rounds(
 
         # Execute the count query to get the total results count
         total_results = client.execute(count_query)[0][0]
-  
+
         pagination = {}
         if (page_num - 1) * page_size + page_size >= total_results:
             pagination["next"] = None
@@ -209,7 +209,7 @@ async def get_aggregated_game_rounds(
     except Exception as e:
         logger.error(f"[GET Endpoint] An error occurred: {str(e)}")
         raise HTTPException(status_code=500, detail=f"[GET Endpoint] An error occurred: {str(e)}")
-        
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
