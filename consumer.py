@@ -2,7 +2,7 @@ import fastavro, io
 from config import (
     BATCH_MAX_RECORDS,
     AVRO_SCHEMA_CONFIG,
-    initialize_kafka_consumer,
+    configure_kafka_consumer,
     configure_clickhouse_client
 )
 
@@ -38,11 +38,11 @@ def insert_records_into_clickhouse(client, records):
     client.execute(insert_data_query)
 
 def main():
-    # Initialize Kafka consumer and configure ClickHouse client
-    consumer = initialize_kafka_consumer()
+    # Configure Kafka consumer and ClickHouse client
+    consumer = configure_kafka_consumer()
     client = configure_clickhouse_client()
     try:
-        
+
         # Initialize an empty batch list to hold Avro records
         message_batch = []
 
@@ -56,7 +56,7 @@ def main():
                     insert_records_into_clickhouse(client, message_batch)
                     message_batch.clear()
                 continue  # Continue polling for more messages
-                
+
             if message.error():
                 print(f"Error while consuming message: {message.error()}")
             else:
