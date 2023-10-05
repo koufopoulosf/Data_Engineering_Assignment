@@ -101,7 +101,7 @@ def configure_kafka_consumer():
         consumer.subscribe([KAFKA_TOPIC])  # Subscribe to the Kafka topic
         return consumer
     except Exception as e:
-        print(f"Error initializing Kafka consumer: {str(e)}")
+        print(f"Error configuring Kafka consumer: {str(e)}")
         sys.exit(1)
 
 # Configure ClickHouse client
