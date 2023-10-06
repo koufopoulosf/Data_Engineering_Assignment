@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+fastavro
+loguru
+confluent-kafka
+clickhouse_driver
+python-multipart
+orjson
